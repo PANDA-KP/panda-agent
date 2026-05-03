@@ -44,6 +44,20 @@ st.markdown("""
     section[data-testid="stSidebar"] { background: #F7F6F3; }
     footer { display: none; }
     header { display: none; }
+
+    /* 聊天输入框固定底部 */
+    .stChatInput {
+        position: sticky;
+        bottom: 0;
+        z-index: 999;
+        background: #FAFAF8;
+        padding-bottom: 1rem;
+    }
+
+    /* 聊天区域底部留白，防止最后一条消息被输入框挡住 */
+    div[data-testid="stChatMessageContainer"] {
+        padding-bottom: 2rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -288,8 +302,13 @@ def search_conversations(query, max_results=5):
 
 # ==================== 工具 ====================
 def tool_web_search(query, max_results=5):
+    """联网搜索，关键词没匹配到时返回最新新闻"""
     if not feedparser:
         return "⚠️ 需要安装 feedparser\n\n运行：pip install feedparser", []
+
+    import requests
+
+    # RSS源列表
     rss_sources = [
         ("新华网", "http://www.news.cn/rss/politics.xml"),
         ("新华网财经", "http://www.news.cn/rss/fortune.xml"),
@@ -298,34 +317,70 @@ def tool_web_search(query, max_results=5):
         ("IT之家", "https://www.ithome.com/rss/"),
         ("少数派", "https://sspai.com/feed"),
     ]
+
     all_items = []
     ql = query.lower()
+
+    # 关键词拆分
+    query_words = [w for w in re.split(r'[\s，。、，]+', ql) if len(w) >= 1]
+
     for name, url in rss_sources:
         try:
             feed = feedparser.parse(url)
-            for e in feed.entries[:20]:
+            for e in feed.entries[:30]:
                 title = getattr(e, 'title', '')
                 summary = re.sub(r'<[^>]+>', '', getattr(e, 'summary', title))[:300]
                 link = getattr(e, 'link', '')
-                all_items.append({"source": name, "title": title, "summary": summary, "link": link})
+                published = getattr(e, 'published', '')
+                all_items.append({
+                    "source": name,
+                    "title": title,
+                    "summary": summary,
+                    "link": link,
+                    "published": published
+                })
         except:
             continue
+
     if not all_items:
-        return "⚠️ 未能获取新闻源，请检查网络", []
-    words = [w for w in re.split(r'[\s，。、]+', ql) if w]
+        return "⚠️ 未能获取新闻源\n\n请检查网络连接后重试", []
+
+    # 评分：标题权重x3，正文权重x1
     for item in all_items:
-        text = (item["title"] + item["summary"]).lower()
-        item["score"] = sum(1 for w in words if w in text)
+        title_lower = item["title"].lower()
+        summary_lower = item["summary"].lower()
+        score = 0
+        for word in query_words:
+            if word in title_lower:
+                score += 3
+            if word in summary_lower:
+                score += 1
+        item["score"] = score
+
+    # 分离精确匹配和无匹配
     matched = [s for s in all_items if s["score"] > 0]
-    results = sorted(matched, key=lambda x: x["score"], reverse=True)[:max_results] if matched else all_items[:max_results]
-    output = f"🔍 搜索「{query}」：\n\n"
+    unmatched = [s for s in all_items if s["score"] == 0]
+
+    if matched:
+        # 有匹配：按分数排序
+        matched.sort(key=lambda x: x["score"], reverse=True)
+        results = matched[:max_results]
+        header = f"🔍 搜索「{query}」找到 {len(matched)} 条相关结果：\n\n"
+    else:
+        # 无匹配：返回最新新闻，提示用户
+        unmatched.sort(key=lambda x: x.get("published", ""), reverse=True)
+        results = unmatched[:max_results]
+        header = f"🔍 搜索「{query}」没有找到精确匹配的结果。\n\n以下是当前最新资讯：\n\n"
+
+    output = header
     for i, r in enumerate(results, 1):
         output += f"**{i}. [{r['source']}] {r['title']}**\n"
         if r['summary'] and r['summary'] != r['title']:
-            output += f"{r['summary'][:180]}\n"
+            output += f"{r['summary'][:200]}\n"
         if r['link']:
             output += f"🔗 {r['link']}\n"
         output += "\n"
+
     return output, results
 
 
@@ -357,8 +412,10 @@ def tool_run_code(code, timeout=10):
         out = (result.stdout or "") + ("\n⚠️ " + result.stderr if result.stderr else "")
         return out.strip() or "✅ 执行完成，无输出"
     except subprocess.TimeoutExpired:
-        try: os.unlink(tp)
-        except: pass
+        try:
+            os.unlink(tp)
+        except:
+            pass
         return f"⚠️ 超时（{timeout}秒）"
     except Exception as e:
         return f"⚠️ 出错：{e}"
@@ -629,7 +686,6 @@ if st.session_state.page == "settings":
 
     # 人格选择
     persona_names = list(PERSONA_PRESETS.keys())
-    # 找到当前人格
     current_persona_name = None
     for pname, pdata in PERSONA_PRESETS.items():
         if pdata["agent_name"] == config.get("agent_name", "Panda"):
@@ -705,7 +761,10 @@ if st.session_state.page == "settings":
 
     # 保存
     if st.button("💾 保存设置", use_container_width=True, type="primary"):
-        main_key = api_key.strip() if api_key else (config.get("api_keys", {}).get(selected_model["id"] if selected_model else "mimo-v2-flash", [None])[0] or "")
+        main_key = api_key.strip() if api_key else ""
+        if not main_key:
+            model_k = api_keys_dict.get(selected_model["id"] if selected_model else "mimo-v2-flash", [])
+            main_key = model_k[0] if model_k else ""
         updates = {
             "api_key": main_key,
             "auto_routing": auto_routing if 'auto_routing' in dir() else config.get("auto_routing", True),
