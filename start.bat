@@ -1,8 +1,8 @@
 @echo off
-chcp 65001 >nul
 echo.
-echo  🐼 正在启动 Panda Agent...
-echo  浏览器会自动打开，如果没有，请访问 http://localhost:8501
-echo  关闭此窗口会停止 Panda Agent
+echo  Starting Panda Agent...
+echo  Browser will open automatically.
+echo  If not, visit http://localhost:8501
+echo  Close this window to stop.
 echo.
 streamlit run app.py
